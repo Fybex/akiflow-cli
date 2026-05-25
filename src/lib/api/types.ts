@@ -223,9 +223,10 @@ export interface CreateEventPayload {
   origin_account_id: string | null;
   calendar_id: string;
   origin_calendar_id: string | null;
+  recurring_id?: string | null;
   content?: Record<string, unknown>;
   attendees?: unknown[];
-  recurrence?: string | null;
+  recurrence?: string[] | null;
   color?: string | null;
   read_only?: boolean;
   global_created_at?: string | null;

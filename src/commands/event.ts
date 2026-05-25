@@ -172,9 +172,11 @@ export const eventAddCommand = defineCommand({
     const startTime = createDateTimeUTC(eventDate, parsedTime.hours, parsedTime.minutes);
     const endTime = new Date(new Date(startTime).getTime() + durationSeconds * 1000).toISOString();
     const now = new Date().toISOString();
+    const eventId = crypto.randomUUID();
+    const recurrence = recurrenceInput ? [recurrenceInput] : null;
 
     const event: CreateEventPayload = {
-      id: crypto.randomUUID(),
+      id: eventId,
       title,
       description: descInput ?? "",
       start_time: startTime,
@@ -188,9 +190,12 @@ export const eventAddCommand = defineCommand({
       origin_account_id: calendar.origin_account_id,
       calendar_id: calendar.id,
       origin_calendar_id: calendar.origin_id,
+      // A recurring master self-references via recurring_id == id; without this
+      // Google drops the RRULE and creates a single event.
+      recurring_id: recurrence ? eventId : null,
       content: { sendUpdates: "all" },
       attendees: [],
-      recurrence: recurrenceInput ?? null,
+      recurrence,
       color,
       read_only: false,
       global_updated_at: now,
