@@ -8,6 +8,7 @@ import { projectCommand } from "./commands/project";
 import { completionCommand } from "./commands/completion";
 import { cal } from "./commands/cal";
 import { block } from "./commands/block";
+import { eventCommand } from "./commands/event";
 import { authCommand } from "./commands/auth";
 import { cacheCommand } from "./commands/cache";
 
@@ -37,6 +38,7 @@ const main = defineCommand({
     completion: completionCommand,
     cal,
     block,
+    event: eventCommand,
     auth: authCommand,
     cache: cacheCommand,
   },
