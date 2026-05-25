@@ -2,7 +2,11 @@ import { loadCredentials, saveCredentials } from "../auth/storage";
 import type {
   ApiResponse,
   AkiflowCredentials,
+  Calendar,
+  CalendarEvent,
+  CreateEventPayload,
   CreateTaskPayload,
+  DeleteEventPayload,
   Label,
   Tag,
   Task,
@@ -136,13 +140,13 @@ export class AkiflowClient {
   }
 
   private async request<TData>(
-    method: "GET" | "PATCH",
+    method: "GET" | "PATCH" | "POST",
     path: string,
     body?: unknown,
     retried = false
   ): Promise<ApiResponse<TData>> {
     const url = `${BASE_URL}${path}`;
-    const headers = await this.buildHeaders(method === "PATCH");
+    const headers = await this.buildHeaders(method !== "GET");
 
     let response: Response;
     try {
@@ -245,6 +249,29 @@ export class AkiflowClient {
     tasks: Array<CreateTaskPayload | UpdateTaskPayload>
   ): Promise<ApiResponse<Task[]>> {
     return this.request<Task[]>("PATCH", "/v5/tasks", tasks);
+  }
+
+  async getCalendars(): Promise<ApiResponse<Calendar[]>> {
+    return this.request<Calendar[]>(
+      "GET",
+      "/v3/calendars?per_page=2500&with_deleted=false"
+    );
+  }
+
+  async getEvents(
+    options: { withDeleted?: boolean } = {}
+  ): Promise<ApiResponse<CalendarEvent[]>> {
+    const withDeleted = options.withDeleted ? "true" : "false";
+    return this.request<CalendarEvent[]>(
+      "GET",
+      `/v3/events?per_page=2500&with_deleted=${withDeleted}`
+    );
+  }
+
+  async upsertEvents(
+    events: Array<CreateEventPayload | DeleteEventPayload>
+  ): Promise<ApiResponse<CalendarEvent[]>> {
+    return this.request<CalendarEvent[]>("POST", "/v3/events", events);
   }
 
   async getLabels(options: { limit?: number; syncToken?: string } = {}): Promise<

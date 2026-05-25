@@ -170,6 +170,81 @@ export interface TimeSlot {
   deleted_at: string | null;
 }
 
+export interface Calendar {
+  id: string;
+  user_id: number;
+  origin_id: string | null;
+  connector_id: string | null;
+  akiflow_account_id: string | null;
+  origin_account_id: string | null;
+  title: string;
+  primary: boolean;
+  akiflow_primary: boolean;
+  read_only: boolean;
+  timezone: string | null;
+  deleted_at: string | null;
+}
+
+export interface CalendarEvent {
+  id: string;
+  title: string | null;
+  description: string | null;
+  start_time: string | null;
+  end_time: string | null;
+  start_date: string | null;
+  end_date: string | null;
+  start_datetime_tz: string | null;
+  status: string | null;
+  calendar_id: string | null;
+  connector_id: string | null;
+  akiflow_account_id: string | null;
+  origin_account_id: string | null;
+  origin_calendar_id: string | null;
+  creator_id: string | null;
+  organizer_id: string | null;
+  recurrence: string | string[] | null;
+  global_created_at: string | null;
+  global_updated_at: string;
+  deleted_at: string | null;
+}
+
+export interface CreateEventPayload {
+  id: string;
+  title: string;
+  description?: string;
+  start_time: string;
+  end_time: string;
+  start_datetime_tz: string;
+  status: string;
+  creator_id: string | null;
+  organizer_id: string | null;
+  connector_id: string | null;
+  akiflow_account_id: string | null;
+  origin_account_id: string | null;
+  calendar_id: string;
+  origin_calendar_id: string | null;
+  content?: Record<string, unknown>;
+  attendees?: unknown[];
+  recurrence?: string | null;
+  color?: string | null;
+  read_only?: boolean;
+  global_created_at?: string | null;
+  global_updated_at: string;
+}
+
+export interface DeleteEventPayload {
+  id: string;
+  status: string;
+  deleted_at: string;
+  global_updated_at: string;
+  calendar_id?: string;
+  connector_id?: string | null;
+  akiflow_account_id?: string | null;
+  origin_account_id?: string | null;
+  origin_calendar_id?: string | null;
+  content?: Record<string, unknown>;
+}
+
 export interface AkiflowCredentials {
   token: string;
   clientId: string;
