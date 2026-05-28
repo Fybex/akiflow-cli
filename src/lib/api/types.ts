@@ -91,11 +91,16 @@ export interface CreateTaskPayload {
   links?: string[];
   content?: Record<string, unknown>;
   calendar_id?: string;
+  status?: TaskStatus;
   // Akiflow stores task recurrence as an array of iCal lines (RRULE, optional
   // DTSTART). A recurring master also self-references via recurring_id == id.
   recurrence?: string | string[];
   recurring_id?: string;
   recurrence_version?: number;
+  // A single-occurrence exception sets recurring_id -> master plus original_date(/datetime)
+  // marking the RRULE slot it overrides.
+  original_date?: string;
+  original_datetime?: string;
 }
 
 export interface UpdateTaskPayload {
@@ -119,6 +124,9 @@ export interface UpdateTaskPayload {
   done_at?: string | null;
   status?: TaskStatus;
   deleted_at?: string | null;
+  // Editing a recurring master's rule (whole-series scope).
+  recurrence?: string | string[];
+  recurrence_version?: number;
 }
 
 export interface Label {

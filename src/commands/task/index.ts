@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
 import { createClient } from "../../lib/api/client";
-import type { UpdateTaskPayload } from "../../lib/api/types";
+import type { CreateTaskPayload, UpdateTaskPayload } from "../../lib/api/types";
 import { parseDuration } from "../../lib/duration-parser";
 import {
   parseDate,
@@ -12,6 +12,12 @@ import {
   createDateTimeUTC,
   getLocalTimezone,
 } from "../../lib/date-parser";
+import {
+  normalizeRrule,
+  extractRrule,
+  rruleWithUntil,
+  icalUntilDayBefore,
+} from "../../lib/rrule";
 
 interface ContextFile {
   tasks: Array<{
@@ -85,16 +91,51 @@ function formatDate(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
+/** Resolve a YYYY-MM-DD or natural-language date, defaulting to today when omitted. */
+function resolveTargetDate(input: string | undefined): string | null {
+  if (!input) return getTodayDate();
+  const m = input.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (m) return m[0];
+  return parseDate(input);
+}
+
+/** Parse a --due value (YYYY-MM-DD or natural language) into a date string, or exit on failure. */
+function parseDueOrExit(dueInput: string): string {
+  const m = dueInput.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (m) return m[0];
+  const parsed = parseDate(dueInput);
+  if (!parsed) {
+    console.error(`Error: Could not parse due date "${dueInput}"`);
+    process.exit(1);
+  }
+  return parsed;
+}
+
+/** The occurrence datetime (UTC ISO) for targetDate at the master's local time-of-day. */
+function occurrenceDatetimeUTC(masterDatetime: string, targetDate: string): string {
+  const d = new Date(masterDatetime);
+  return createDateTimeUTC(targetDate, d.getHours(), d.getMinutes());
+}
+
 export const taskEditCommand = defineCommand({
   meta: {
     name: "edit",
-    description: "Edit task fields (title, description, deadline, link)",
+    description:
+      "Edit a task. For recurring tasks pass --scope this|following|all (this = one occurrence, all = whole series, following = this and future).",
   },
   args: {
     id: {
       type: "string",
       description: "Task ID (short ID or UUID)",
       required: true,
+    },
+    scope: {
+      type: "string",
+      description: "For recurring tasks: this (one occurrence) | following (this + future) | all (whole series)",
+    },
+    date: {
+      type: "string",
+      description: "Target occurrence date for --scope this|following (default: today)",
     },
     title: {
       type: "string",
@@ -112,13 +153,20 @@ export const taskEditCommand = defineCommand({
       type: "string",
       description: "URL to attach to the task",
     },
+    recurrence: {
+      type: "string",
+      description: "New repeat RRULE (only with --scope all|following)",
+    },
   },
   run: async (context) => {
     const id = context.args.id as string;
+    const scopeInput = context.args.scope as string | undefined;
+    const dateInput = context.args.date as string | undefined;
     const titleInput = context.args.title as string | undefined;
     const dueInput = context.args.due as string | undefined;
     const descInput = context.args.desc as string | undefined;
     const linkInput = context.args.link as string | undefined;
+    const recurrenceInput = context.args.recurrence as string | undefined;
     const contextFile = readContextFile();
 
     const taskId = resolveTaskId(id, contextFile);
@@ -128,88 +176,302 @@ export const taskEditCommand = defineCommand({
     }
 
     const client = createClient();
-    const hasUpdates = titleInput || dueInput || descInput || linkInput;
+
+    // Load the task to learn its recurrence context.
+    let task;
+    try {
+      const response = await client.getTask(taskId);
+      if (!response.success || !response.data) {
+        console.error("Error: Failed to fetch task");
+        process.exit(1);
+      }
+      task = response.data;
+    } catch (error) {
+      console.error("Error: Failed to fetch task");
+      if (error instanceof Error) console.error(error.message);
+      process.exit(1);
+    }
+
+    const isRecurring = !!(task.recurrence || task.recurring_id);
+    const hasUpdates = !!(titleInput || dueInput || descInput || linkInput || recurrenceInput);
 
     if (!hasUpdates) {
-      // Show current fields
-      try {
-        const response = await client.getTask(taskId);
-        if (!response.success || !response.data) {
-          console.error("Error: Failed to fetch task");
-          process.exit(1);
-        }
-
-        const task = response.data;
-
-        console.log(`Task: ${task.title}`);
-        console.log(`ID: ${task.id}`);
-        console.log(`Description: ${task.description || "(none)"}`);
-        console.log(`Date: ${task.date || "(not scheduled)"}`);
-        console.log(`Due date: ${task.due_date || "(none)"}`);
-        console.log(`Status: ${task.done ? "Done" : "Active"}`);
-        console.log(`Priority: ${task.priority || "(none)"}`);
-        console.log(`Duration: ${task.duration ? `${Math.floor(task.duration / 60)}m` : "(none)"}`);
-        console.log(`Links: ${task.links && task.links.length > 0 ? task.links.join(", ") : "(none)"}`);
-        console.log(`Project ID: ${task.listId || "(none)"}`);
-        console.log(`Tags: ${task.tags_ids.length > 0 ? task.tags_ids.join(", ") : "(none)"}`);
-      } catch (error) {
-        console.error("Error: Failed to fetch task");
-        if (error instanceof Error) console.error(error.message);
-        process.exit(1);
+      // Show current fields.
+      console.log(`Task: ${task.title}`);
+      console.log(`ID: ${task.id}`);
+      console.log(`Description: ${task.description || "(none)"}`);
+      console.log(`Date: ${task.date || "(not scheduled)"}`);
+      console.log(`Due date: ${task.due_date || "(none)"}`);
+      console.log(`Status: ${task.done ? "Done" : "Active"}`);
+      console.log(`Priority: ${task.priority || "(none)"}`);
+      console.log(`Duration: ${task.duration ? `${Math.floor(task.duration / 60)}m` : "(none)"}`);
+      console.log(`Links: ${task.links && task.links.length > 0 ? task.links.join(", ") : "(none)"}`);
+      console.log(`Project ID: ${task.listId || "(none)"}`);
+      console.log(`Tags: ${task.tags_ids.length > 0 ? task.tags_ids.join(", ") : "(none)"}`);
+      if (isRecurring) {
+        const rule = extractRrule(task.recurrence);
+        console.log(`Recurrence: ${rule ?? "(occurrence of a recurring series)"}`);
       }
       return;
     }
 
-    // Apply updates
-    const timestamp = new Date().toISOString();
-    const updatePayload: UpdateTaskPayload = {
-      id: taskId,
-      global_updated_at: timestamp,
-    };
+    const now = new Date().toISOString();
+    const dueDate = dueInput ? parseDueOrExit(dueInput) : undefined;
 
-    if (titleInput) {
-      updatePayload.title = titleInput;
-    }
-
-    if (dueInput) {
-      const dueDateMatch = dueInput.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-      if (dueDateMatch) {
-        updatePayload.due_date = dueDateMatch[0];
-      } else {
-        const parsedDue = parseDate(dueInput);
-        if (!parsedDue) {
-          console.error(`Error: Could not parse due date "${dueInput}"`);
+    // --- Non-recurring task: plain field update (unchanged behavior). ---
+    if (!isRecurring) {
+      if (recurrenceInput) {
+        console.error("Error: --recurrence edits a recurring task. Create one with 'af add --recurrence ... --at ...'.");
+        process.exit(1);
+      }
+      const payload: UpdateTaskPayload = { id: taskId, global_updated_at: now };
+      if (titleInput) payload.title = titleInput;
+      if (dueDate) payload.due_date = dueDate;
+      if (descInput) payload.description = descInput;
+      if (linkInput) payload.links = [linkInput];
+      try {
+        const response = await client.upsertTasks([payload]);
+        if (!response.success) {
+          console.error("Error: Failed to update task");
+          console.error(response.message);
           process.exit(1);
         }
-        updatePayload.due_date = parsedDue;
-      }
-    }
-
-    if (descInput) {
-      updatePayload.description = descInput;
-    }
-
-    if (linkInput) {
-      updatePayload.links = [linkInput];
-    }
-
-    try {
-      const response = await client.upsertTasks([updatePayload]);
-
-      if (response.success) {
         const updated = response.data[0];
         console.log(`✓ Updated task "${id}"`);
         if (titleInput) console.log(`  Title: ${updated?.title}`);
         if (dueInput) console.log(`  Deadline: ${updated?.due_date}`);
         if (descInput) console.log(`  Description: ${updated?.description}`);
         if (linkInput) console.log(`  Link: ${updated?.links?.[0]}`);
-      } else {
+      } catch (error) {
         console.error("Error: Failed to update task");
+        if (error instanceof Error) console.error(error.message);
+        process.exit(1);
+      }
+      return;
+    }
+
+    // --- Recurring task: scope is required (prevents accidental whole-series edits). ---
+    if (!scopeInput) {
+      console.error(
+        `Error: "${task.title}" is a recurring task. Specify --scope this|following|all (this = only one occurrence, all = whole series, following = this and future).`
+      );
+      process.exit(1);
+    }
+    const scope = scopeInput.toLowerCase();
+    if (scope !== "this" && scope !== "following" && scope !== "all") {
+      console.error(`Error: Invalid --scope "${scopeInput}". Use this, following, or all.`);
+      process.exit(1);
+    }
+
+    const masterId = task.recurring_id ?? task.id;
+    let master = task;
+    if (masterId !== task.id) {
+      try {
+        const mr = await client.getTask(masterId);
+        if (mr.success && mr.data) master = mr.data;
+      } catch {
+        // fall back to the task itself as the template
+      }
+    }
+
+    // Validate --recurrence usage.
+    let newRule: string | undefined;
+    if (recurrenceInput) {
+      if (scope === "this") {
+        console.error("Error: --recurrence changes the repeat rule and cannot apply to a single occurrence (use --scope all or following).");
+        process.exit(1);
+      }
+      const norm = normalizeRrule(recurrenceInput);
+      if (!norm) {
+        console.error(`Error: Invalid recurrence "${recurrenceInput}". Expected an RRULE, e.g. 'RRULE:FREQ=WEEKLY;BYDAY=MO,WE,FR'`);
+        process.exit(1);
+      }
+      newRule = norm;
+    }
+
+    // ---- scope: all — edit the master (whole series). ----
+    if (scope === "all") {
+      const payload: UpdateTaskPayload = { id: masterId, global_updated_at: now };
+      if (titleInput) payload.title = titleInput;
+      if (dueDate) payload.due_date = dueDate;
+      if (descInput) payload.description = descInput;
+      if (linkInput) payload.links = [linkInput];
+      if (newRule) {
+        payload.recurrence = [newRule];
+        payload.recurrence_version = (master.recurrence_version ?? 1) + 1;
+      }
+      try {
+        const response = await client.upsertTasks([payload]);
+        if (!response.success) {
+          console.error("Error: Failed to update series");
+          console.error(response.message);
+          process.exit(1);
+        }
+        console.log(`✓ Updated whole series "${master.title ?? id}"`);
+        if (titleInput) console.log(`  Title: ${titleInput}`);
+        if (descInput) console.log(`  Description: ${descInput}`);
+        if (dueDate) console.log(`  Deadline: ${dueDate}`);
+        if (linkInput) console.log(`  Link: ${linkInput}`);
+        if (newRule) console.log(`  Recurrence: ${newRule}`);
+      } catch (error) {
+        console.error("Error: Failed to update series");
+        if (error instanceof Error) console.error(error.message);
+        process.exit(1);
+      }
+      return;
+    }
+
+    // this | following both target a specific occurrence date.
+    const targetDate = resolveTargetDate(dateInput);
+    if (!targetDate) {
+      console.error(`Error: Could not parse date "${dateInput}"`);
+      process.exit(1);
+    }
+
+    // ---- scope: this — override a single occurrence (an exception row). ----
+    if (scope === "this") {
+      let existing;
+      try {
+        const all = await client.getTasks({ limit: 2500 });
+        existing = (all.data ?? []).find(
+          (t) =>
+            !t.deleted_at &&
+            t.id !== masterId &&
+            t.recurring_id === masterId &&
+            (t.date === targetDate || t.original_date === targetDate)
+        );
+      } catch {
+        // ignore — fall through to create
+      }
+
+      if (existing) {
+        const payload: UpdateTaskPayload = { id: existing.id, global_updated_at: now };
+        if (titleInput) payload.title = titleInput;
+        if (dueDate) payload.due_date = dueDate;
+        if (descInput) payload.description = descInput;
+        if (linkInput) payload.links = [linkInput];
+        try {
+          const response = await client.upsertTasks([payload]);
+          if (!response.success) {
+            console.error("Error: Failed to update occurrence");
+            console.error(response.message);
+            process.exit(1);
+          }
+        } catch (error) {
+          console.error("Error: Failed to update occurrence");
+          if (error instanceof Error) console.error(error.message);
+          process.exit(1);
+        }
+      } else {
+        // Materialize an exception overriding this occurrence; other days inherit the master.
+        const exceptionId = crypto.randomUUID();
+        const datetime = master.datetime ? occurrenceDatetimeUTC(master.datetime, targetDate) : undefined;
+        const exception: CreateTaskPayload = {
+          id: exceptionId,
+          title: titleInput ?? master.title ?? "",
+          global_created_at: now,
+          global_updated_at: now,
+          recurring_id: masterId,
+          date: targetDate,
+          original_date: targetDate,
+        };
+        if (master.recurrence_version != null) exception.recurrence_version = master.recurrence_version;
+        const desc = descInput ?? master.description;
+        if (desc) exception.description = desc;
+        if (master.duration != null) exception.duration = master.duration;
+        if (dueDate) exception.due_date = dueDate;
+        const links = linkInput ? [linkInput] : master.links;
+        if (links && links.length > 0) exception.links = links;
+        if (datetime) {
+          exception.datetime = datetime;
+          exception.original_datetime = datetime;
+          exception.datetime_tz = master.datetime_tz ?? getLocalTimezone();
+        }
+        if (master.calendar_id) {
+          exception.calendar_id = master.calendar_id;
+          exception.status = master.status ?? 2;
+        }
+        if (master.listId) exception.listId = master.listId;
+
+        try {
+          const response = await client.upsertTasks([exception]);
+          if (!response.success) {
+            console.error("Error: Failed to create occurrence override");
+            console.error(response.message);
+            process.exit(1);
+          }
+        } catch (error) {
+          console.error("Error: Failed to create occurrence override");
+          if (error instanceof Error) console.error(error.message);
+          process.exit(1);
+        }
+      }
+
+      console.log(`✓ Updated the ${targetDate} occurrence of "${master.title ?? id}" (other days unchanged)`);
+      if (titleInput) console.log(`  Title: ${titleInput}`);
+      if (descInput) console.log(`  Description: ${descInput}`);
+      if (dueDate) console.log(`  Deadline: ${dueDate}`);
+      if (linkInput) console.log(`  Link: ${linkInput}`);
+      return;
+    }
+
+    // ---- scope: following — split the series at targetDate. ----
+    const currentRule = extractRrule(master.recurrence);
+    if (!currentRule) {
+      console.error("Error: Could not read the recurrence rule to split the series.");
+      process.exit(1);
+    }
+    // 1) Cap the existing master to end the day before targetDate.
+    const capPayload: UpdateTaskPayload = {
+      id: masterId,
+      global_updated_at: now,
+      recurrence: [rruleWithUntil(currentRule, icalUntilDayBefore(targetDate))],
+      recurrence_version: (master.recurrence_version ?? 1) + 1,
+    };
+    // 2) Create a new master from targetDate carrying the ongoing rule + overrides.
+    const ongoingRule = newRule ?? currentRule.replace(/;?UNTIL=[^;]*/i, "");
+    const newMasterId = crypto.randomUUID();
+    const datetime = master.datetime ? occurrenceDatetimeUTC(master.datetime, targetDate) : undefined;
+    const newMaster: CreateTaskPayload = {
+      id: newMasterId,
+      title: titleInput ?? master.title ?? "",
+      global_created_at: now,
+      global_updated_at: now,
+      recurring_id: newMasterId,
+      recurrence: [ongoingRule],
+      recurrence_version: 2,
+      date: targetDate,
+    };
+    const desc = descInput ?? master.description;
+    if (desc) newMaster.description = desc;
+    if (master.duration != null) newMaster.duration = master.duration;
+    if (dueDate) newMaster.due_date = dueDate;
+    const links = linkInput ? [linkInput] : master.links;
+    if (links && links.length > 0) newMaster.links = links;
+    if (datetime) {
+      newMaster.datetime = datetime;
+      newMaster.datetime_tz = master.datetime_tz ?? getLocalTimezone();
+    }
+    if (master.calendar_id) {
+      newMaster.calendar_id = master.calendar_id;
+      newMaster.status = master.status ?? 2;
+    }
+    if (master.listId) newMaster.listId = master.listId;
+
+    try {
+      const response = await client.upsertTasks([capPayload, newMaster]);
+      if (!response.success) {
+        console.error("Error: Failed to split the series");
         console.error(response.message);
         process.exit(1);
       }
+      console.log(`✓ Updated "${master.title ?? id}" from ${targetDate} onward (earlier occurrences unchanged)`);
+      console.log(`  New series id: ${newMasterId}`);
+      if (titleInput) console.log(`  Title: ${titleInput}`);
+      if (descInput) console.log(`  Description: ${descInput}`);
+      if (newRule) console.log(`  Recurrence: ${ongoingRule}`);
     } catch (error) {
-      console.error("Error: Failed to update task");
+      console.error("Error: Failed to split the series");
       if (error instanceof Error) console.error(error.message);
       process.exit(1);
     }
@@ -528,7 +790,7 @@ export const taskCommand = defineCommand({
   },
   run: async () => {
     console.log("Task management subcommands:");
-    console.log("  edit   - Show editable fields for a task");
+    console.log("  edit   - Edit a task or recurring series (--scope this|following|all)");
     console.log("  move   - Move task to a project");
     console.log("  plan   - Schedule task for a specific date");
     console.log("  snooze - Push task back by a duration");
