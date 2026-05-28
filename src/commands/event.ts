@@ -46,6 +46,12 @@ function formatLocalTime(isoUtc: string): string {
   });
 }
 
+/** Local YYYY-MM-DD for an ISO instant (matches the calendar day the user sees). */
+function localDateString(isoUtc: string): string {
+  const d = new Date(isoUtc);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 export const eventAddCommand = defineCommand({
   meta: {
     name: "add",
@@ -110,6 +116,29 @@ export const eventAddCommand = defineCommand({
     const recurrenceInput = context.args.recurrence as string | undefined;
     const colorInput = context.args.color as string | undefined;
     const descInput = context.args.desc as string | undefined;
+
+    // Guard: only one date flag may set the day; the if/else chain below silently
+    // discards the others and falls through to today, creating a synced calendar
+    // event on the wrong day with no feedback.
+    const dateFlagCount = [today, tomorrow, dateInput !== undefined].filter(Boolean).length;
+    if (dateFlagCount > 1) {
+      console.error("Error: Conflicting date flags. Use only one of --today, --tomorrow, or --date.");
+      process.exit(1);
+    }
+
+    // Guard: event add ships the raw recurrence string with no validation. An RRULE
+    // missing FREQ= (or not RRULE-shaped) makes Google drop the recurrence and create
+    // a single one-off event, so the caller thinks they created a recurring event.
+    if (recurrenceInput) {
+      const normalized = recurrenceInput.trim().toUpperCase();
+      const isValidRrule = normalized.startsWith("RRULE:") && normalized.includes("FREQ=");
+      if (!isValidRrule) {
+        console.error(
+          `Error: Invalid recurrence "${recurrenceInput}". Expected an RRULE containing FREQ=, e.g. 'RRULE:FREQ=WEEKLY;BYDAY=MO,WE,FR'`
+        );
+        process.exit(1);
+      }
+    }
 
     let color: string | null = null;
     if (colorInput) {
@@ -290,39 +319,105 @@ export const eventDeleteCommand = defineCommand({
 export const eventListCommand = defineCommand({
   meta: {
     name: "ls",
-    description: "List today's calendar events",
+    description: "List or search calendar events (today by default)",
   },
-  run: async () => {
+  args: {
+    search: {
+      type: "string",
+      alias: "s",
+      description: "Search by title or description across all dates",
+    },
+    days: {
+      type: "string",
+      description: "Show events from today through the next N days",
+    },
+    date: {
+      type: "string",
+      alias: "d",
+      description: "Show events on a specific date (YYYY-MM-DD or natural language)",
+    },
+    all: {
+      type: "boolean",
+      description: "Show all events (ignore date window)",
+    },
+    json: {
+      type: "boolean",
+      description: "Output as JSON",
+    },
+  },
+  run: async ({ args }) => {
     const client = createClient();
+    const search = args.search as string | undefined;
+    const daysInput = args.days as string | undefined;
+    const dateInput = args.date as string | undefined;
+    const all = args.all as boolean;
+    const json = args.json as boolean;
 
     try {
       const response = await client.getEvents();
-      const today = getTodayDate();
+      let events = (response.data ?? []).filter(
+        (e) => !e.deleted_at && e.start_time
+      );
 
-      const events = (response.data ?? [])
-        .filter((e) => !e.deleted_at && e.start_time)
-        .filter((e) => {
-          const local = new Date(e.start_time as string);
-          const y = local.getFullYear();
-          const m = String(local.getMonth() + 1).padStart(2, "0");
-          const d = String(local.getDate()).padStart(2, "0");
-          return `${y}-${m}-${d}` === today;
-        })
-        .sort(
-          (a, b) =>
-            new Date(a.start_time as string).getTime() -
-            new Date(b.start_time as string).getTime()
+      if (search) {
+        const q = search.toLowerCase();
+        events = events.filter(
+          (e) =>
+            (e.title ?? "").toLowerCase().includes(q) ||
+            (e.description ?? "").toLowerCase().includes(q)
         );
+      } else if (dateInput) {
+        const parsed = parseDate(dateInput);
+        if (!parsed) {
+          console.error(`Error: Could not parse date "${dateInput}"`);
+          process.exit(1);
+        }
+        events = events.filter(
+          (e) => localDateString(e.start_time as string) === parsed
+        );
+      } else if (!all) {
+        const start = getTodayDate();
+        let end = start;
+        if (daysInput) {
+          const n = Number.parseInt(daysInput, 10);
+          if (Number.isNaN(n) || n < 0) {
+            console.error("Error: --days must be a non-negative number");
+            process.exit(1);
+          }
+          const d = new Date(`${start}T00:00:00`);
+          d.setDate(d.getDate() + n);
+          end = localDateString(d.toISOString());
+        }
+        events = events.filter((e) => {
+          const ld = localDateString(e.start_time as string);
+          return ld >= start && ld <= end;
+        });
+      }
+
+      events.sort(
+        (a, b) =>
+          new Date(a.start_time as string).getTime() -
+          new Date(b.start_time as string).getTime()
+      );
+
+      if (json) {
+        console.log(JSON.stringify(events, null, 2));
+        return;
+      }
 
       if (events.length === 0) {
-        console.log("No events scheduled for today.");
+        console.log("No events found.");
         return;
       }
 
       for (const e of events) {
+        const d = localDateString(e.start_time as string);
         const start = formatLocalTime(e.start_time as string);
         const end = e.end_time ? formatLocalTime(e.end_time) : "?";
-        console.log(`${start}-${end}  ${e.title ?? "(untitled)"}`);
+        const rec = e.recurrence ? "  \x1b[90m(recurring)\x1b[0m" : "";
+        console.log(
+          `${d} ${start}-${end}  ${e.title ?? "(untitled)"}${rec}  \x1b[90m${e.id}\x1b[0m`
+        );
       }
     } catch (error) {
       if (error instanceof Error) {
@@ -349,6 +444,6 @@ export const eventCommand = defineCommand({
     console.log("Event subcommands:");
     console.log("  add    - Create a real calendar event");
     console.log("  delete - Delete an event by UUID");
-    console.log("  ls     - List today's events");
+    console.log("  ls     - List or search events (--search, --days, --date, --all, --json)");
   },
 });
