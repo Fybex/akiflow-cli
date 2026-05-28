@@ -551,6 +551,19 @@ describe("add command", () => {
 
   it("exits with error for invalid duration format", async () => {
     // given
+    // --duration requires --at, and --at resolves a calendar via the time-slots fetch,
+    // so mock that before the duration parser is reached.
+    fetchSpy.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          success: true,
+          message: null,
+          data: [{ id: "ts-1", calendar_id: "test-calendar-id" }],
+        }),
+        { status: 200 }
+      )
+    );
+
     const consoleErrorSpy = spyOn(console, "error");
     const processExitSpy = spyOn(process, "exit").mockImplementation(() => {
       throw new Error("process.exit");
@@ -559,12 +572,103 @@ describe("add command", () => {
     // when/then
     await expect(
       add.run({
-        args: { title: "Test task", today: true, tomorrow: false, date: undefined, project: undefined, at: undefined, duration: "invalid", t: undefined, d: undefined, p: undefined, _: [] },
+        args: { title: "Test task", today: true, tomorrow: false, date: undefined, project: undefined, at: "21:00", duration: "invalid", t: undefined, d: undefined, p: undefined, _: [] },
         rawArgs: [],
       } as any)
     ).rejects.toThrow();
 
     expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining("Invalid duration format"));
+
+    consoleErrorSpy.mockRestore();
+    processExitSpy.mockRestore();
+  });
+
+  it("exits with error when --recurrence given without --at", async () => {
+    // given
+    const consoleErrorSpy = spyOn(console, "error");
+    const processExitSpy = spyOn(process, "exit").mockImplementation(() => {
+      throw new Error("process.exit");
+    });
+
+    // when/then
+    await expect(
+      add.run({
+        args: { title: "Test task", today: true, tomorrow: false, date: undefined, project: undefined, at: undefined, duration: undefined, recurrence: "RRULE:FREQ=WEEKLY;BYDAY=MO", t: undefined, d: undefined, p: undefined, _: [] },
+        rawArgs: [],
+      } as any)
+    ).rejects.toThrow();
+
+    expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining("--recurrence requires --at"));
+
+    consoleErrorSpy.mockRestore();
+    processExitSpy.mockRestore();
+  });
+
+  it("exits with error for conflicting date flags", async () => {
+    // given
+    const consoleErrorSpy = spyOn(console, "error");
+    const processExitSpy = spyOn(process, "exit").mockImplementation(() => {
+      throw new Error("process.exit");
+    });
+
+    // when/then
+    await expect(
+      add.run({
+        args: { title: "Test task", today: true, tomorrow: true, date: undefined, project: undefined, at: undefined, duration: undefined, t: undefined, d: undefined, p: undefined, _: [] },
+        rawArgs: [],
+      } as any)
+    ).rejects.toThrow();
+
+    expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining("Conflicting date flags"));
+
+    consoleErrorSpy.mockRestore();
+    processExitSpy.mockRestore();
+  });
+
+  it("exits with error when --duration given without --at", async () => {
+    // given
+    const consoleErrorSpy = spyOn(console, "error");
+    const processExitSpy = spyOn(process, "exit").mockImplementation(() => {
+      throw new Error("process.exit");
+    });
+
+    // when/then
+    await expect(
+      add.run({
+        args: { title: "Test task", today: true, tomorrow: false, date: undefined, project: undefined, at: undefined, duration: "30m", t: undefined, d: undefined, p: undefined, _: [] },
+        rawArgs: [],
+      } as any)
+    ).rejects.toThrow();
+
+    expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining("--duration requires --at"));
+
+    consoleErrorSpy.mockRestore();
+    processExitSpy.mockRestore();
+  });
+
+  it("exits with error when --at resolves no default calendar", async () => {
+    // given: time-slots fetch returns empty, so getDefaultCalendarId resolves null
+    fetchSpy.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ success: true, message: null, data: [] }),
+        { status: 200 }
+      )
+    );
+
+    const consoleErrorSpy = spyOn(console, "error");
+    const processExitSpy = spyOn(process, "exit").mockImplementation(() => {
+      throw new Error("process.exit");
+    });
+
+    // when/then
+    await expect(
+      add.run({
+        args: { title: "Test task", today: true, tomorrow: false, date: undefined, project: undefined, at: "21:00", duration: undefined, t: undefined, d: undefined, p: undefined, _: [] },
+        rawArgs: [],
+      } as any)
+    ).rejects.toThrow();
+
+    expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining("needs a default calendar"));
 
     consoleErrorSpy.mockRestore();
     processExitSpy.mockRestore();
