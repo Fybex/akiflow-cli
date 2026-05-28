@@ -5,15 +5,7 @@ import { getTodayDate, getTomorrowDate, parseDate, parseTime, createDateTimeUTC,
 import { parseDurationToSeconds } from "../lib/duration-parser";
 import { addPendingTask } from "../lib/task-cache";
 import { getDefaultCalendarId } from "../lib/calendar";
-
-/** Normalize a user-supplied recurrence into a canonical 'RRULE:...' line, or null if invalid. */
-function normalizeRrule(input: string): string | null {
-  const upper = input.trim().toUpperCase();
-  if (!upper) return null;
-  if (upper.startsWith("RRULE:")) return upper.includes("FREQ=") ? upper : null;
-  if (upper.startsWith("FREQ=")) return `RRULE:${upper}`;
-  return null;
-}
+import { normalizeRrule } from "../lib/rrule";
 
 export const add = defineCommand({
   meta: {

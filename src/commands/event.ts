@@ -11,6 +11,7 @@ import {
 } from "../lib/date-parser";
 import { parseDurationToSeconds } from "../lib/duration-parser";
 import { resolveCalendar } from "../lib/calendar";
+import { normalizeRrule } from "../lib/rrule";
 
 const DEFAULT_DURATION_SECONDS = 3600;
 
@@ -129,15 +130,11 @@ export const eventAddCommand = defineCommand({
     // Guard: event add ships the raw recurrence string with no validation. An RRULE
     // missing FREQ= (or not RRULE-shaped) makes Google drop the recurrence and create
     // a single one-off event, so the caller thinks they created a recurring event.
-    if (recurrenceInput) {
-      const normalized = recurrenceInput.trim().toUpperCase();
-      const isValidRrule = normalized.startsWith("RRULE:") && normalized.includes("FREQ=");
-      if (!isValidRrule) {
-        console.error(
-          `Error: Invalid recurrence "${recurrenceInput}". Expected an RRULE containing FREQ=, e.g. 'RRULE:FREQ=WEEKLY;BYDAY=MO,WE,FR'`
-        );
-        process.exit(1);
-      }
+    if (recurrenceInput && !normalizeRrule(recurrenceInput)) {
+      console.error(
+        `Error: Invalid recurrence "${recurrenceInput}". Expected an RRULE containing FREQ=, e.g. 'RRULE:FREQ=WEEKLY;BYDAY=MO,WE,FR'`
+      );
+      process.exit(1);
     }
 
     let color: string | null = null;
