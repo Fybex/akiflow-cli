@@ -88,7 +88,7 @@ function formatDate(date: Date): string {
 export const taskEditCommand = defineCommand({
   meta: {
     name: "edit",
-    description: "Show editable fields for a task",
+    description: "Edit task fields (title, description, deadline, link)",
   },
   args: {
     id: {
@@ -96,9 +96,29 @@ export const taskEditCommand = defineCommand({
       description: "Task ID (short ID or UUID)",
       required: true,
     },
+    title: {
+      type: "string",
+      description: "New title",
+    },
+    due: {
+      type: "string",
+      description: "Deadline date (YYYY-MM-DD or natural language)",
+    },
+    desc: {
+      type: "string",
+      description: "Task description or notes",
+    },
+    link: {
+      type: "string",
+      description: "URL to attach to the task",
+    },
   },
   run: async (context) => {
     const id = context.args.id as string;
+    const titleInput = context.args.title as string | undefined;
+    const dueInput = context.args.due as string | undefined;
+    const descInput = context.args.desc as string | undefined;
+    const linkInput = context.args.link as string | undefined;
     const contextFile = readContextFile();
 
     const taskId = resolveTaskId(id, contextFile);
@@ -108,36 +128,89 @@ export const taskEditCommand = defineCommand({
     }
 
     const client = createClient();
+    const hasUpdates = titleInput || dueInput || descInput || linkInput;
 
-    try {
-      const response = await client.getTask(taskId);
-      if (!response.success || !response.data) {
+    if (!hasUpdates) {
+      // Show current fields
+      try {
+        const response = await client.getTask(taskId);
+        if (!response.success || !response.data) {
+          console.error("Error: Failed to fetch task");
+          process.exit(1);
+        }
+
+        const task = response.data;
+
+        console.log(`Task: ${task.title}`);
+        console.log(`ID: ${task.id}`);
+        console.log(`Description: ${task.description || "(none)"}`);
+        console.log(`Date: ${task.date || "(not scheduled)"}`);
+        console.log(`Due date: ${task.due_date || "(none)"}`);
+        console.log(`Status: ${task.done ? "Done" : "Active"}`);
+        console.log(`Priority: ${task.priority || "(none)"}`);
+        console.log(`Duration: ${task.duration ? `${Math.floor(task.duration / 60)}m` : "(none)"}`);
+        console.log(`Links: ${task.links && task.links.length > 0 ? task.links.join(", ") : "(none)"}`);
+        console.log(`Project ID: ${task.listId || "(none)"}`);
+        console.log(`Tags: ${task.tags_ids.length > 0 ? task.tags_ids.join(", ") : "(none)"}`);
+      } catch (error) {
         console.error("Error: Failed to fetch task");
+        if (error instanceof Error) console.error(error.message);
         process.exit(1);
       }
+      return;
+    }
 
-      const task = response.data;
+    // Apply updates
+    const timestamp = new Date().toISOString();
+    const updatePayload: UpdateTaskPayload = {
+      id: taskId,
+      global_updated_at: timestamp,
+    };
 
-      console.log(`Task: ${task.title}`);
-      console.log(`ID: ${task.id}`);
-      console.log(`Description: ${task.description || "(none)"}`);
-      console.log(`Date: ${task.date || "(not scheduled)"}`);
-      console.log(`Status: ${task.status === 2 ? "Done" : task.status === 0 ? "Deleted" : "Active"}`);
-      console.log(`Priority: ${task.priority || "(none)"}`);
-      console.log(`Duration: ${task.duration ? `${task.duration}ms` : "(none)"}`);
-      console.log(`Due date: ${task.due_date || "(none)"}`);
-      console.log(`Project ID: ${task.listId || "(none)"}`);
-      console.log(`Tags: ${task.tags_ids.length > 0 ? task.tags_ids.join(", ") : "(none)"}`);
-      console.log("\nEditable fields:");
-      console.log("  Use 'af task move <id> <project>' to change project");
-      console.log("  Use 'af task plan <id> <date>' to schedule task");
-      console.log("  Use 'af task snooze <id> <duration>' to push back task");
-      console.log("  Use 'af task delete <id>' to delete task");
-    } catch (error) {
-      console.error("Error: Failed to edit task");
-      if (error instanceof Error) {
-        console.error(error.message);
+    if (titleInput) {
+      updatePayload.title = titleInput;
+    }
+
+    if (dueInput) {
+      const dueDateMatch = dueInput.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (dueDateMatch) {
+        updatePayload.due_date = dueDateMatch[0];
+      } else {
+        const parsedDue = parseDate(dueInput);
+        if (!parsedDue) {
+          console.error(`Error: Could not parse due date "${dueInput}"`);
+          process.exit(1);
+        }
+        updatePayload.due_date = parsedDue;
       }
+    }
+
+    if (descInput) {
+      updatePayload.description = descInput;
+    }
+
+    if (linkInput) {
+      updatePayload.links = [linkInput];
+    }
+
+    try {
+      const response = await client.upsertTasks([updatePayload]);
+
+      if (response.success) {
+        const updated = response.data[0];
+        console.log(`✓ Updated task "${id}"`);
+        if (titleInput) console.log(`  Title: ${updated?.title}`);
+        if (dueInput) console.log(`  Deadline: ${updated?.due_date}`);
+        if (descInput) console.log(`  Description: ${updated?.description}`);
+        if (linkInput) console.log(`  Link: ${updated?.links?.[0]}`);
+      } else {
+        console.error("Error: Failed to update task");
+        console.error(response.message);
+        process.exit(1);
+      }
+    } catch (error) {
+      console.error("Error: Failed to update task");
+      if (error instanceof Error) console.error(error.message);
       process.exit(1);
     }
   },
