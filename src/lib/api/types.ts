@@ -91,7 +91,11 @@ export interface CreateTaskPayload {
   links?: string[];
   content?: Record<string, unknown>;
   calendar_id?: string;
-  recurrence?: string;
+  // Akiflow stores task recurrence as an array of iCal lines (RRULE, optional
+  // DTSTART). A recurring master also self-references via recurring_id == id.
+  recurrence?: string | string[];
+  recurring_id?: string;
+  recurrence_version?: number;
 }
 
 export interface UpdateTaskPayload {
