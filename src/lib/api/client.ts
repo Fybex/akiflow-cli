@@ -258,6 +258,11 @@ export class AkiflowClient {
     return this.request<TimeSlot[]>("PATCH", "/v5/time_slots", slots);
   }
 
+  async getTimeSlot(slotId: string): Promise<TimeSlot | null> {
+    const response = await this.getTimeSlots({ limit: DEFAULT_LIMIT });
+    return (response.data ?? []).find((s) => s.id === slotId) ?? null;
+  }
+
   async getCalendars(): Promise<ApiResponse<Calendar[]>> {
     return this.request<Calendar[]>(
       "GET",

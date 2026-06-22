@@ -61,6 +61,10 @@ export const add = defineCommand({
       type: "string",
       description: "URL to attach to the task",
     },
+    slot: {
+      type: "string",
+      description: "Existing time_slot ID to attach this task to (for stacking parallel tasks in one slot)",
+    },
   },
   run: async (context) => {
     const client = createClient();
@@ -76,6 +80,7 @@ export const add = defineCommand({
     const dueInput = context.args.due as string | undefined;
     const descInput = context.args.desc as string | undefined;
     const linkInput = context.args.link as string | undefined;
+    const slotInput = context.args.slot as string | undefined;
 
     // Guard: only one date flag may set the day; the if/else chain below silently
     // discards the others, landing the task on the wrong day with no feedback.
@@ -220,37 +225,55 @@ export const add = defineCommand({
       task.listId = listId;
     }
 
-    if (calendarId) {
-      const slotId = crypto.randomUUID();
-      const now2 = new Date().toISOString();
+    if (calendarId || slotInput) {
+      let slotId: string;
 
-      const startISO = taskDateTime!;
-      const endMs = new Date(startISO).getTime() + (taskDuration ?? 1800) * 1000;
-      const endISO = new Date(endMs).toISOString();
+      if (slotInput) {
+        slotId = slotInput;
+        const slot = await client.getTimeSlot(slotId);
+        if (slot) {
+          if (!taskDate) {
+            taskDate = slot.start_time.slice(0, 10);
+            task.date = taskDate;
+          }
+          if (!taskDateTime) {
+            taskDateTime = slot.start_time;
+            task.datetime = slot.start_time;
+            task.datetime_tz = slot.start_datetime_tz;
+          }
+        }
+      } else {
+        slotId = crypto.randomUUID();
+        const now2 = new Date().toISOString();
 
-      const slot: CreateTimeSlotPayload = {
-        id: slotId,
-        title,
-        start_time: startISO,
-        end_time: endISO,
-        start_datetime_tz: taskDateTimeTz ?? getLocalTimezone(),
-        status: "confirmed",
-        calendar_id: calendarId,
-        data: {},
-        recurring_id: null,
-        label_id: null,
-        section_id: null,
-        recurrence: null,
-        global_created_at: now2,
-        global_updated_at: now2,
-      };
+        const startISO = taskDateTime!;
+        const endMs = new Date(startISO).getTime() + (taskDuration ?? 1800) * 1000;
+        const endISO = new Date(endMs).toISOString();
 
-      try {
-        await client.upsertTimeSlots([slot]);
-      } catch (error) {
-        console.error("Error: Failed to create time slot for task");
-        if (error instanceof Error) console.error(error.message);
-        process.exit(1);
+        const slot: CreateTimeSlotPayload = {
+          id: slotId,
+          title,
+          start_time: startISO,
+          end_time: endISO,
+          start_datetime_tz: taskDateTimeTz ?? getLocalTimezone(),
+          status: "confirmed",
+          calendar_id: calendarId!,
+          data: {},
+          recurring_id: null,
+          label_id: null,
+          section_id: null,
+          recurrence: null,
+          global_created_at: now2,
+          global_updated_at: now2,
+        };
+
+        try {
+          await client.upsertTimeSlots([slot]);
+        } catch (error) {
+          console.error("Error: Failed to create time slot for task");
+          if (error instanceof Error) console.error(error.message);
+          process.exit(1);
+        }
       }
 
       task.time_slot_id = slotId;
