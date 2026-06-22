@@ -33,16 +33,6 @@ export async function resolveCalendar(
 }
 
 export async function getDefaultCalendarId(client: AkiflowClient): Promise<string | null> {
-  try {
-    const response = await client.getTimeSlots({ limit: 10 });
-    const timeSlots = response.data;
-
-    if (timeSlots.length === 0) {
-      return null;
-    }
-
-    return timeSlots[0]!.calendar_id;
-  } catch {
-    return null;
-  }
+  const cal = await resolveCalendar(client);
+  return cal?.id ?? null;
 }

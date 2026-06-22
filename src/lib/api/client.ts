@@ -6,6 +6,7 @@ import type {
   CalendarEvent,
   CreateEventPayload,
   CreateTaskPayload,
+  CreateTimeSlotPayload,
   DeleteEventPayload,
   Label,
   Tag,
@@ -249,6 +250,12 @@ export class AkiflowClient {
     tasks: Array<CreateTaskPayload | UpdateTaskPayload>
   ): Promise<ApiResponse<Task[]>> {
     return this.request<Task[]>("PATCH", "/v5/tasks", tasks);
+  }
+
+  async upsertTimeSlots(
+    slots: CreateTimeSlotPayload[]
+  ): Promise<ApiResponse<TimeSlot[]>> {
+    return this.request<TimeSlot[]>("PATCH", "/v5/time_slots", slots);
   }
 
   async getCalendars(): Promise<ApiResponse<Calendar[]>> {

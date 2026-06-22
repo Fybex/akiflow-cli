@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
 import { createClient } from "../../lib/api/client";
-import type { CreateTaskPayload, UpdateTaskPayload } from "../../lib/api/types";
+import type { CreateTaskPayload, CreateTimeSlotPayload, UpdateTaskPayload } from "../../lib/api/types";
 import { parseDuration } from "../../lib/duration-parser";
 import {
   parseDate,
@@ -12,6 +12,7 @@ import {
   createDateTimeUTC,
   getLocalTimezone,
 } from "../../lib/date-parser";
+import { getDefaultCalendarId } from "../../lib/calendar";
 import {
   normalizeRrule,
   extractRrule,
@@ -613,8 +614,41 @@ export const taskPlanCommand = defineCommand({
         process.exit(1);
       }
 
-      updatePayload.datetime = createDateTimeUTC(dateStr, parsedTime.hours, parsedTime.minutes);
+      const datetime = createDateTimeUTC(dateStr, parsedTime.hours, parsedTime.minutes);
+      updatePayload.datetime = datetime;
       updatePayload.datetime_tz = getLocalTimezone();
+      updatePayload.status = 2;
+
+      const calendarId = await getDefaultCalendarId(client);
+      if (calendarId) {
+        const slotId = crypto.randomUUID();
+        const nowISO = new Date().toISOString();
+        const endISO = new Date(new Date(datetime).getTime() + 1800 * 1000).toISOString();
+
+        const slot: CreateTimeSlotPayload = {
+          id: slotId,
+          title: "",
+          start_time: datetime,
+          end_time: endISO,
+          start_datetime_tz: getLocalTimezone(),
+          status: "confirmed",
+          calendar_id: calendarId,
+          data: {},
+          recurring_id: null,
+          label_id: null,
+          section_id: null,
+          recurrence: null,
+          global_created_at: nowISO,
+          global_updated_at: nowISO,
+        };
+
+        try {
+          await client.upsertTimeSlots([slot]);
+          updatePayload.time_slot_id = slotId;
+        } catch {
+          // Slot creation failed — still set the datetime/status on the task.
+        }
+      }
     }
 
     try {

@@ -1,6 +1,6 @@
 import { defineCommand } from "citty";
 import { createClient } from "../lib/api/client";
-import type { CreateTaskPayload } from "../lib/api/types";
+import type { CreateTaskPayload, CreateTimeSlotPayload } from "../lib/api/types";
 import { getTodayDate, getTomorrowDate, parseDate, parseTime, createDateTimeUTC, getLocalTimezone } from "../lib/date-parser";
 import { parseDurationToSeconds } from "../lib/duration-parser";
 import { addPendingTask } from "../lib/task-cache";
@@ -136,8 +136,6 @@ export const add = defineCommand({
       taskDateTimeTz = getLocalTimezone();
       calendarId = await getDefaultCalendarId(client);
 
-      // Guard: a timed task needs a calendar to render as a visible block. Without one
-      // it gets a datetime but no calendar_id / status:2, becoming a silent invisible block.
       if (!calendarId) {
         console.error(
           "Error: --at needs a default calendar but none could be resolved. Run 'af auth' and ensure you have a writable calendar with time slots before creating a timed task."
@@ -223,8 +221,40 @@ export const add = defineCommand({
     }
 
     if (calendarId) {
-      task.calendar_id = calendarId;
-      task.status = 2; // Time-blocked status
+      const slotId = crypto.randomUUID();
+      const now2 = new Date().toISOString();
+
+      const startISO = taskDateTime!;
+      const endMs = new Date(startISO).getTime() + (taskDuration ?? 1800) * 1000;
+      const endISO = new Date(endMs).toISOString();
+
+      const slot: CreateTimeSlotPayload = {
+        id: slotId,
+        title,
+        start_time: startISO,
+        end_time: endISO,
+        start_datetime_tz: taskDateTimeTz ?? getLocalTimezone(),
+        status: "confirmed",
+        calendar_id: calendarId,
+        data: {},
+        recurring_id: null,
+        label_id: null,
+        section_id: null,
+        recurrence: null,
+        global_created_at: now2,
+        global_updated_at: now2,
+      };
+
+      try {
+        await client.upsertTimeSlots([slot]);
+      } catch (error) {
+        console.error("Error: Failed to create time slot for task");
+        if (error instanceof Error) console.error(error.message);
+        process.exit(1);
+      }
+
+      task.time_slot_id = slotId;
+      task.status = 2;
     }
 
     if (dueInput) {
