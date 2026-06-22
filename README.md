@@ -1,31 +1,96 @@
 <div align="center">
 
-# Akiflow CLI
+# Akiflow CLI (Fork)
 
 **Command-line interface for [Akiflow](https://akiflow.com) task management**
 
-[![GitHub Release](https://img.shields.io/github/v/release/code-yeongyu/akiflow-cli?color=369eff&labelColor=black&logo=github&style=flat-square)](https://github.com/code-yeongyu/akiflow-cli/releases)
-[![GitHub Stars](https://img.shields.io/github/stars/code-yeongyu/akiflow-cli?color=ffcb47&labelColor=black&style=flat-square)](https://github.com/code-yeongyu/akiflow-cli/stargazers)
-[![GitHub Issues](https://img.shields.io/github/issues/code-yeongyu/akiflow-cli?color=ff80eb&labelColor=black&style=flat-square)](https://github.com/code-yeongyu/akiflow-cli/issues)
-[![CI](https://img.shields.io/github/actions/workflow/status/code-yeongyu/akiflow-cli/test.yml?branch=master&labelColor=black&style=flat-square&logo=github&label=tests)](https://github.com/code-yeongyu/akiflow-cli/actions/workflows/test.yml)
-[![License](https://img.shields.io/badge/license-MIT-white?labelColor=black&style=flat-square)](https://github.com/code-yeongyu/akiflow-cli/blob/master/LICENSE)
+Fork of [code-yeongyu/akiflow-cli](https://github.com/code-yeongyu/akiflow-cli) with time slot support, unified daily view, and recurring task editing.
 
 </div>
 
 ---
 
-Bun-native CLI for managing Akiflow tasks directly from your terminal. Built with TypeScript, [citty](https://github.com/unjs/citty) framework, and compiles to a standalone `af` binary.
+Bun-native CLI for managing Akiflow tasks from the terminal. Built with TypeScript, [citty](https://github.com/unjs/citty), compiles to a standalone `af` binary.
 
-## Features
+## Fork changes
 
-- **Task Management**: List, add, complete, edit, move, plan, snooze, delete tasks
-- **Project Management**: List, create, delete labels/projects
-- **Calendar View**: View scheduled tasks and time blocks
-- **Time Blocking**: Create focus time blocks
-- **Natural Language Dates**: "tomorrow", "next friday", "in 2 hours"
-- **Short ID System**: Use `af do 1` instead of full UUIDs
-- **Shell Completions**: Bash, Zsh, Fish support
-- **Secure Auth**: Browser token extraction with automatic token refresh
+### Time slots (grid blocks)
+
+The upstream CLI set `calendar_id` + `status:2` directly on tasks, which did not produce visible calendar grid blocks in Akiflow. This fork creates `time_slot` records via `PATCH /v5/time_slots` (matching the web app's pattern), then links tasks via `time_slot_id`.
+
+```bash
+# Grid block (creates a time_slot)
+af add "Focus work" --at "15:30" --duration "90m"
+
+# Stack parallel tasks into one slot
+af add "Task A" --at "15:30" --duration "90m" --project work   # creates slot
+af add "Task B" --slot <slot-id>                               # joins same slot
+
+# List / delete slots (find orphans)
+af slot ls
+af slot delete <id>
+```
+
+### Unified daily view (`af today`)
+
+Replaces the broken `af cal`. Shows events, time slots with stacked tasks, and unslotted tasks in one time-sorted view:
+
+```
+📅 Monday, Jun 22
+
+⏱ 09:00→09:30  (30m)
+   ○ Plan the day ↻
+⏱ 14:00→16:00  (2h)
+   ○ Write report
+   ○ Review PRs
+📌 16:00→16:30  Team standup (30m) ↻
+
+📋 Today (no time block):
+   ○ Buy groceries
+   ○ Call dentist
+```
+
+### Recurring task editing (`af task edit --scope`)
+
+Edit recurring tasks per-occurrence or whole-series:
+
+```bash
+af task edit <id> --scope this      --date 2026-06-22 --desc "Today's plan"
+af task edit <id> --scope all       --title "New title"
+af task edit <id> --scope following --date 2026-07-01 --title "From July onward"
+```
+
+### Other fixes
+
+- `af task plan --at` now creates a time_slot (was setting datetime without a grid block)
+- `af block` fixed to use slot creation (was using the old calendar_id approach)
+- `getDefaultCalendarId` uses `resolveCalendar` (akiflow-primary lookup) instead of fragile time-slot[0] approach
+- `af add --no-slot` flag for timed tasks without grid blocks (experimental — API may auto-create slots)
+- `af add --project` sets `label_id` on the slot, not just `listId` on the task
+- Removed `af cal` (replaced by `af today`) and `af hello` (placeholder)
+
+## Commands
+
+```
+af today                    Unified daily view (events + slots + tasks)
+af ls [--inbox|--all|--search|--project|--json]   List tasks
+af add "Title" [--at|--duration|--slot|--no-slot|--project|--due|--desc|--link|--recurrence]
+af do <id>                  Complete task
+af task edit <id> [--scope this|following|all] [--title|--due|--desc|--link|--recurrence]
+af task move <id> --project <name>
+af task plan <id> [--date|--at]
+af task snooze <id> --duration <dur>
+af task delete <id>
+af block <duration> <title> Auto-slot into next free time
+af slot ls [--date YYYY-MM-DD]
+af slot delete <id>
+af event ls [--search|--days|--date|--all|--json]
+af event add "Title" --at <time> [--duration|--calendar|--color|--recurrence]
+af event delete --id <uuid>
+af project ls|create|delete
+af auth|auth status
+af cache
+```
 
 ## Installation
 
@@ -33,202 +98,61 @@ Bun-native CLI for managing Akiflow tasks directly from your terminal. Built wit
 
 - [Bun](https://bun.sh) v1.0+
 
-### From Source
+### From source
 
 ```bash
-# Clone the repository
-git clone https://github.com/code-yeongyu/akiflow-cli.git
+git clone https://github.com/Fybex/akiflow-cli.git
 cd akiflow-cli
-
-# Install dependencies
 bun install
-
-# Build standalone binary
 bun run build
-
-# Move to PATH (optional)
 mv af /usr/local/bin/
 ```
 
 ### Development
 
 ```bash
-# Run directly
-bun run start
-
-# Hot reload development
-bun run dev
-
-# Run tests
-bun test
+bun run start          # Run directly
+bun run dev            # Hot reload
+bun test               # Run tests
+bunx tsc --noEmit      # Type check
 ```
 
 ## Authentication
 
-Before using the CLI, authenticate with your Akiflow account:
-
 ```bash
-af auth
+af auth         # Extract session token from browser
+af auth status  # Check auth status
 ```
 
-This extracts your session token from your browser (Chrome, Firefox, Safari, Arc, Brave, Edge supported).
-
-Check authentication status:
-
-```bash
-af auth status
-```
-
-## Usage
-
-### List Tasks
-
-```bash
-# List today's tasks
-af ls
-
-# List inbox (unscheduled tasks)
-af ls --inbox
-
-# List by project
-af ls --project "Work"
-```
-
-### Add Tasks
-
-```bash
-# Add task for today
-af add "Review PR" -t
-
-# Add with specific date
-af add "Submit report" -d "next friday"
-
-# Add with duration
-af add "Focus time" -d "tomorrow 10am" --duration "2h"
-```
-
-### Complete Tasks
-
-```bash
-# Complete by short ID (requires af ls first)
-af do 1
-
-# Complete by full UUID
-af do "task-uuid-here"
-```
-
-### Manage Tasks
-
-```bash
-# Edit task title
-af task edit 1 --title "Updated title"
-
-# Move to project
-af task move 1 --project "Personal"
-
-# Reschedule
-af task plan 1 -d "tomorrow"
-
-# Snooze
-af task snooze 1 --duration "2h"
-
-# Delete
-af task delete 1
-```
-
-### Calendar & Time Blocking
-
-```bash
-# View today's schedule
-af cal
-
-# Find free time slots
-af cal --free
-
-# Create time block
-af block 1h "Deep work"
-af block 2h "Meeting prep" --start "14:00"
-```
-
-### Projects
-
-```bash
-# List projects
-af project ls
-
-# Create project
-af project create "New Project"
-```
-
-### Shell Completions
-
-```bash
-# Bash
-af completion bash >> ~/.bashrc
-
-# Zsh
-af completion zsh >> ~/.zshrc
-
-# Fish
-af completion fish > ~/.config/fish/completions/af.fish
-```
+Supports Chrome, Firefox, Safari, Arc, Brave, Edge. Credentials stored in `~/.config/af/credentials.json` with automatic token refresh.
 
 ## Architecture
 
 ```
-akiflow-cli/
-├── src/
-│   ├── index.ts              # CLI entry point
-│   ├── commands/             # Command modules
-│   │   ├── add.ts
-│   │   ├── ls.ts
-│   │   ├── do.ts
-│   │   ├── auth.ts
-│   │   ├── task/index.ts     # Subcommands
-│   │   ├── project.ts
-│   │   ├── cal.ts
-│   │   ├── block.ts
-│   │   └── completion.ts
-│   ├── lib/
-│   │   ├── api/              # Akiflow API client
-│   │   ├── auth/             # Token extraction & storage
-│   │   ├── date-parser.ts    # chrono-node wrapper
-│   │   └── duration-parser.ts
-│   └── __tests__/            # Test files
-└── docs/
-    ├── COMMANDS.md
-    └── API_INTEGRATION.md
-```
-
-## How It Works
-
-### Short ID System
-
-Running `af ls` saves task context to `~/.cache/af/last-list.json`. Subsequent commands like `af do 1` resolve the short ID from this cache. Full UUIDs always work as fallback.
-
-### Token Extraction
-
-Authentication works by extracting your existing Akiflow session from your browser:
-1. IndexedDB (JWT pattern matching)
-2. Cookies (PBKDF2 decryption for Chrome-family, binary parsing for Safari)
-
-No OAuth flow required - just log into Akiflow in your browser once.
-
-### Credentials Storage
-
-Credentials are stored in `~/.config/af/credentials.json` on all platforms.
-
-## Development
-
-```bash
-# Run tests
-bun test
-
-# Type checking
-bunx tsc --noEmit
-
-# Build binary
-bun run build
+src/
+├── index.ts              CLI entry point
+├── commands/
+│   ├── today.ts          Unified daily view
+│   ├── add.ts            Task creation (slots, stacking, recurrence)
+│   ├── ls.ts             Task listing
+│   ├── do.ts             Complete tasks
+│   ├── task/index.ts     edit/move/plan/snooze/delete
+│   ├── slot.ts           Slot ls + delete
+│   ├── block.ts          Auto-slot into free time
+│   ├── event.ts          Calendar events
+│   ├── project.ts        Labels/projects
+│   ├── auth.ts           Browser token extraction
+│   ├── cache.ts          Local cache management
+│   └── completion.ts     Shell completions
+├── lib/
+│   ├── api/              Akiflow API client + types
+│   ├── auth/             Token extraction & storage
+│   ├── calendar.ts       Calendar resolution
+│   ├── date-parser.ts    chrono-node wrapper
+│   ├── duration-parser.ts
+│   ├── rrule.ts          RRULE helpers
+│   └── task-cache.ts     Pending task cache
+└── __tests__/
 ```
 
 ## License
