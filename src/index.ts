@@ -11,6 +11,7 @@ import { block } from "./commands/block";
 import { eventCommand } from "./commands/event";
 import { authCommand } from "./commands/auth";
 import { cacheCommand } from "./commands/cache";
+import { slotCommand } from "./commands/slot";
 
 const hello = defineCommand({
   meta: {
@@ -41,6 +42,7 @@ const main = defineCommand({
     event: eventCommand,
     auth: authCommand,
     cache: cacheCommand,
+    slot: slotCommand,
   },
 });
 
