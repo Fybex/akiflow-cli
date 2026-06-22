@@ -6,38 +6,27 @@ import { doCommand } from "./commands/do";
 import { taskCommand } from "./commands/task";
 import { projectCommand } from "./commands/project";
 import { completionCommand } from "./commands/completion";
-import { cal } from "./commands/cal";
 import { block } from "./commands/block";
 import { eventCommand } from "./commands/event";
 import { authCommand } from "./commands/auth";
 import { cacheCommand } from "./commands/cache";
 import { slotCommand } from "./commands/slot";
-
-const hello = defineCommand({
-  meta: {
-    name: "hello",
-    description: "Say hello",
-  },
-  run: async () => {
-    console.log("Hello from Akiflow CLI!");
-  },
-});
+import { today } from "./commands/today";
 
 const main = defineCommand({
   meta: {
     name: "af",
     description: "Akiflow CLI - Task management and automation",
-    version: "0.1.1",
+    version: "0.2.0",
   },
   subCommands: {
     add,
-    hello,
+    today,
     do: doCommand,
     ls: lsCommand,
     task: taskCommand,
     project: projectCommand,
     completion: completionCommand,
-    cal,
     block,
     event: eventCommand,
     auth: authCommand,

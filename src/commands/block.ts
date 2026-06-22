@@ -1,7 +1,9 @@
 import { defineCommand } from "citty";
 import { createClient } from "../lib/api/client";
-import type { CreateTaskPayload, TimeSlot } from "../lib/api/types";
+import type { CreateTaskPayload, CreateTimeSlotPayload, TimeSlot } from "../lib/api/types";
 import { parseDuration } from "../lib/duration-parser";
+import { getDefaultCalendarId } from "../lib/calendar";
+import { getLocalTimezone } from "../lib/date-parser";
 
 interface TimeRange {
   start: Date;
@@ -113,7 +115,7 @@ export const block = defineCommand({
       const allTimeSlots = timeSlotsResponse.data;
       const freeSlots = findFreeSlots(allTimeSlots);
 
-      const calendarId = allTimeSlots.length > 0 ? allTimeSlots[0]!.calendar_id : null;
+      const calendarId = await getDefaultCalendarId(client);
 
       const selectedSlot = findSlotForDuration(freeSlots, durationMs);
 
@@ -152,19 +154,41 @@ export const block = defineCommand({
         process.exit(1);
       }
 
-      const startTime = selectedSlot.start.toISOString();
+      const startTimeISO = selectedSlot.start.toISOString();
+      const endTimeISO = new Date(selectedSlot.start.getTime() + durationMs).toISOString();
       const now = new Date().toISOString();
+      const slotId = crypto.randomUUID();
       const taskId = crypto.randomUUID();
+
+      if (calendarId) {
+        const slot: CreateTimeSlotPayload = {
+          id: slotId,
+          title,
+          start_time: startTimeISO,
+          end_time: endTimeISO,
+          start_datetime_tz: getLocalTimezone(),
+          status: "confirmed",
+          calendar_id: calendarId,
+          data: {},
+          recurring_id: null,
+          label_id: null,
+          section_id: null,
+          recurrence: null,
+          global_created_at: now,
+          global_updated_at: now,
+        };
+        await client.upsertTimeSlots([slot]);
+      }
 
       const task: CreateTaskPayload = {
         id: taskId,
         title,
-        datetime: startTime,
-        datetime_tz: new Date().toISOString(),
-        duration: durationMs,
+        datetime: startTimeISO,
+        datetime_tz: getLocalTimezone(),
+        duration: Math.round(durationMs / 1000),
         global_created_at: now,
         global_updated_at: now,
-        ...(calendarId && { calendar_id: calendarId }),
+        ...(calendarId && { time_slot_id: slotId, status: 2 }),
       };
 
       const response = await client.upsertTasks([task]);
