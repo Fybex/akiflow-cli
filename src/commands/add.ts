@@ -260,7 +260,7 @@ export const add = defineCommand({
           calendar_id: calendarId!,
           data: {},
           recurring_id: null,
-          label_id: null,
+          label_id: listId ?? null,
           section_id: null,
           recurrence: null,
           global_created_at: now2,
