@@ -65,6 +65,11 @@ export const add = defineCommand({
       type: "string",
       description: "Existing time_slot ID to attach this task to (for stacking parallel tasks in one slot)",
     },
+    noSlot: {
+      type: "boolean",
+      description: "Set datetime without creating a time_slot (reminder, not a grid block)",
+      alias: "n",
+    },
   },
   run: async (context) => {
     const client = createClient();
@@ -81,6 +86,7 @@ export const add = defineCommand({
     const descInput = context.args.desc as string | undefined;
     const linkInput = context.args.link as string | undefined;
     const slotInput = context.args.slot as string | undefined;
+    const noSlot = context.args.noSlot as boolean;
 
     // Guard: only one date flag may set the day; the if/else chain below silently
     // discards the others, landing the task on the wrong day with no feedback.
@@ -225,7 +231,10 @@ export const add = defineCommand({
       task.listId = listId;
     }
 
-    if (calendarId || slotInput) {
+    if (noSlot && timeInput) {
+      // Timed reminder — no grid block, no slot. Just datetime so it shows
+      // in the today list with a time and gets a notification.
+    } else if (calendarId || slotInput) {
       let slotId: string;
 
       if (slotInput) {
