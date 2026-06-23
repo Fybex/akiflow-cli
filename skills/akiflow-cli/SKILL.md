@@ -113,6 +113,8 @@ af add "Task title" --duration "2h"          # With duration
 af add "Task title" --project "Work"         # Assign to project
 ```
 
+**Grid block sizing:** `--at` + `--duration` creates a visible time slot on the calendar grid. The slot is sized to the task's duration (or 30m if unset). Stacking parallel tasks in one slot: first task creates the slot, additional tasks use `--slot <slot-id>`.
+
 ### Complete Tasks
 
 ```bash
@@ -126,9 +128,16 @@ af do "full-uuid-here"     # Complete by full UUID
 af task edit 1 --title "New title"       # Edit title
 af task move 1 --project "Personal"      # Move to project
 af task plan 1 -d "tomorrow"             # Reschedule
+af task plan 1 --at 14:00                # Reschedule + set time (preserves duration)
 af task snooze 1 --duration "2h"         # Snooze
-af task delete 1                         # Delete
+af task delete 1                         # Soft delete
+af task unschedule 1                     # Remove from time slot (keeps it on the day)
+af task unschedule 1 --delete-slot       # Also soft-delete the now-empty slot
 ```
+
+**Reschedule behavior:** `task plan --at` reads the task first to preserve its duration and reuses the existing time-slot ID (no orphan slots, no 30m default). To move to a different time on a fresh slot, pair with the reschedule workflow in [[#Time Blocking]].
+
+**Soft delete quirk:** `task delete` must send `status: 2` alongside `deleted_at` — PATCH with `deleted_at` alone is silently dropped, the row stays visible. The CLI handles this; if you script direct PATCH calls, send both fields.
 
 ---
 
@@ -151,7 +160,21 @@ af cal -d "tomorrow"             # View specific date
 
 af block 1h "Focus time"         # Create 1-hour time block
 af block 2h "Meeting prep" --start "14:00"  # With start time
+
+af slot ls                       # List today's time slots
+af slot ls -d 2026-06-25         # List slots for a specific date
+af slot delete <id>              # Delete a slot (refuses if tasks are stacked)
+af slot delete <id> --force      # Delete even with stacked tasks (orphans their time_slot_id)
 ```
+
+**Stacking parallel tasks in one slot:** first task uses `--at --duration` (creates the slot), additional tasks use `--slot <slot-id>`:
+
+```bash
+af add "Task A" --at 15:30 --duration 90m --project work
+af add "Task B" --slot <slot-id>
+```
+
+Don't create slots for single quick tasks. If it's a 15m reminder (routines, errands), use `af add -t` (today list, no grid block).
 
 ---
 

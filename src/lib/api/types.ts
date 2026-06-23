@@ -125,7 +125,9 @@ export interface UpdateTaskPayload {
   done_at?: string | null;
   status?: TaskStatus;
   deleted_at?: string | null;
-  time_slot_id?: string;
+  // null explicitly detaches the task from its time slot (sends task back to
+  // its day's list, slot stays or is soft-deleted separately).
+  time_slot_id?: string | null;
   // Editing a recurring master's rule (whole-series scope).
   recurrence?: string | string[];
   recurrence_version?: number;

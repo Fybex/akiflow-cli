@@ -61,10 +61,16 @@ export const slotCommand = defineCommand({
           description: "Time slot ID (8-char prefix or full UUID)",
           required: true,
         },
+        force: {
+          type: "boolean",
+          description: "Delete even if tasks are still stacked in the slot (orphans their time_slot_id)",
+          alias: "f",
+        },
       },
       run: async (context) => {
         const client = createClient();
         const idInput = context.args.id as string;
+        const force = context.args.force as boolean;
 
         const response = await client.getTimeSlots({ limit: 2500 });
         const slots = response.data ?? [];
@@ -74,6 +80,23 @@ export const slotCommand = defineCommand({
 
         if (!slot) {
           console.error(`Error: Time slot "${idInput}" not found`);
+          process.exit(1);
+        }
+
+        // Warn (and refuse without --force) if the slot still has stacked tasks —
+        // deleting a slot orphans those tasks with a dangling time_slot_id, which
+        // is the same Akiflow state that produced the "null" cells on the grid.
+        const allTasks = await client.getAllTasks();
+        const stacked = allTasks.filter(
+          (t) => t.time_slot_id === slot.id && !t.deleted_at
+        );
+        if (stacked.length > 0 && !force) {
+          console.error(
+            `Error: slot ${slot.id.slice(0, 8)} still has ${stacked.length} stacked task(s). Pass --force to delete anyway (orphans their time_slot_id).`
+          );
+          for (const t of stacked) {
+            console.error(`  - ${t.title || "(no title)"} [${t.id.slice(0, 8)}]`);
+          }
           process.exit(1);
         }
 
@@ -95,6 +118,11 @@ export const slotCommand = defineCommand({
         try {
           await client.upsertTimeSlots([deletePayload]);
           console.log(`✓ Deleted slot "${slot.id.slice(0, 8)}" (${slot.title})`);
+          if (stacked.length > 0) {
+            console.error(
+              `Warning: ${stacked.length} task(s) left with dangling time_slot_id. Run 'af task unschedule <id>' on each to clean up.`
+            );
+          }
         } catch (error) {
           console.error("Error: Failed to delete slot");
           if (error instanceof Error) console.error(error.message);

@@ -614,6 +614,16 @@ export const taskPlanCommand = defineCommand({
         process.exit(1);
       }
 
+      // Fetch the task so we can preserve its duration and any existing slot — `task plan`
+      // is also a reschedule, and reschedules were always shrinking slots to 30m and orphaning
+      // the old slot (slot creation always used a fresh UUID, old slot kept its old time).
+      const fetched = await client.getTask(taskId);
+      if (!fetched.success || !fetched.data) {
+        console.error("Error: Failed to fetch task");
+        process.exit(1);
+      }
+      const task = fetched.data;
+
       const datetime = createDateTimeUTC(dateStr, parsedTime.hours, parsedTime.minutes);
       updatePayload.datetime = datetime;
       updatePayload.datetime_tz = getLocalTimezone();
@@ -621,13 +631,26 @@ export const taskPlanCommand = defineCommand({
 
       const calendarId = await getDefaultCalendarId(client);
       if (calendarId) {
-        const slotId = crypto.randomUUID();
+        // Honor the task's existing duration when sizing the slot, falling back to 30m
+        // (Akiflow's smallest visible block). 1800 was hardcoded before, so reschedules
+        // always shrank or grew the slot to 30m regardless of the task's real duration.
+        const slotDurationSec = task.duration && task.duration > 0 ? task.duration : 1800;
+        const endISO = new Date(new Date(datetime).getTime() + slotDurationSec * 1000).toISOString();
+
+        // If the task already has a time_slot, repurpose it (preserves the slot identity
+        // for any other tasks stacked into it). Otherwise create a new one.
+        const oldSlotId = task.time_slot_id;
+        const slotId = oldSlotId ?? crypto.randomUUID();
         const nowISO = new Date().toISOString();
-        const endISO = new Date(new Date(datetime).getTime() + 1800 * 1000).toISOString();
+
+        // Pull the existing slot (if any) to preserve label_id/section_id on the move.
+        const existingSlot = oldSlotId ? await client.getTimeSlot(oldSlotId) : null;
+        const titleForSlot = existingSlot?.title ?? task.title ?? "";
+        const labelIdForSlot = existingSlot?.label_id ?? null;
 
         const slot: CreateTimeSlotPayload = {
           id: slotId,
-          title: "",
+          title: titleForSlot,
           start_time: datetime,
           end_time: endISO,
           start_datetime_tz: getLocalTimezone(),
@@ -635,10 +658,10 @@ export const taskPlanCommand = defineCommand({
           calendar_id: calendarId,
           data: {},
           recurring_id: null,
-          label_id: null,
+          label_id: labelIdForSlot,
           section_id: null,
           recurrence: null,
-          global_created_at: nowISO,
+          global_created_at: existingSlot?.global_created_at ?? nowISO,
           global_updated_at: nowISO,
         };
 
@@ -784,9 +807,13 @@ export const taskDeleteCommand = defineCommand({
     const client = createClient();
     const timestamp = new Date().toISOString();
 
+    // Akiflow quirk: PATCH /v5/tasks with `deleted_at` alone is silently dropped;
+    // the row stays visible in today/inbox. `status: 2` must be sent in the same
+    // payload to flip the row out of the live view. Verified against the live API.
     const updatePayload: UpdateTaskPayload = {
       id: taskId,
       deleted_at: timestamp,
+      status: 2,
       global_updated_at: timestamp,
     };
 
@@ -794,6 +821,10 @@ export const taskDeleteCommand = defineCommand({
       const response = await client.upsertTasks([updatePayload]);
 
       if (response.success) {
+        const updated = response.data?.[0];
+        if (updated && !updated.deleted_at) {
+          console.error(`Warning: task "${id}" PATCH succeeded but server did not set deleted_at. Check web app to confirm. Response: ${JSON.stringify(updated).slice(0, 200)}`);
+        }
         console.log(`✓ Deleted task "${id}"`);
       } else {
         console.error("Error: Failed to delete task");
@@ -810,6 +841,108 @@ export const taskDeleteCommand = defineCommand({
   },
 });
 
+export const taskUnscheduleCommand = defineCommand({
+  meta: {
+    name: "unschedule",
+    description: "Remove a task from its time slot (sends it back to the day list / inbox)",
+  },
+  args: {
+    id: {
+      type: "string",
+      description: "Task ID (short ID or UUID)",
+      required: true,
+    },
+    deleteSlot: {
+      type: "boolean",
+      description: "Also soft-delete the now-empty time slot (default: keep the slot)",
+    },
+  },
+  run: async (context) => {
+    const id = context.args.id as string;
+    const deleteSlot = context.args.deleteSlot as boolean;
+    const contextFile = readContextFile();
+
+    const taskId = resolveTaskId(id, contextFile);
+    if (!taskId) {
+      console.error(`Error: Could not resolve task ID "${id}". Run 'af ls' first or provide a full UUID.`);
+      process.exit(1);
+    }
+
+    const client = createClient();
+    const timestamp = new Date().toISOString();
+
+    // Fetch the task to find its current slot. `GET /v5/tasks/<id>` returns 404
+    // for soft-deleted tasks (Akiflow strips them from the single-task endpoint
+    // once deleted_at is set), so fall back to the list endpoint.
+    let task: import("../../lib/api/types").Task | null = null;
+    const fetched = await client.getTask(taskId);
+    if (fetched.success && fetched.data) {
+      task = fetched.data;
+    } else {
+      const all = await client.getAllTasks();
+      task = all.find((t) => t.id === taskId) ?? null;
+    }
+    if (!task) {
+      console.error(`Error: task "${id}" not found (it may be soft-deleted; check 'af ls --inbox' or the web app)`);
+      process.exit(1);
+    }
+    const oldSlotId = task.time_slot_id;
+
+    // Build the update payload: clear time_slot_id and datetime, keep the date so
+    // the task still shows in the day's list. If the user wants it fully back in
+    // the inbox, they can follow up with `af task plan --id X --date ""` (or edit).
+    const updatePayload: UpdateTaskPayload = {
+      id: taskId,
+      time_slot_id: null,
+      datetime: null,
+      global_updated_at: timestamp,
+    };
+
+    try {
+      const response = await client.upsertTasks([updatePayload]);
+      if (!response.success) {
+        console.error("Error: Failed to unschedule task");
+        console.error(response.message);
+        process.exit(1);
+      }
+      console.log(`✓ Removed task "${id}" from its time slot (kept on ${task.date || "inbox"})`);
+
+      if (oldSlotId && deleteSlot) {
+        // Check the slot for other stacked tasks before nuking it.
+        const allTasks = await client.getAllTasks();
+        const others = allTasks.filter(
+          (t) => t.id !== taskId && t.time_slot_id === oldSlotId && !t.deleted_at
+        );
+        if (others.length > 0) {
+          console.error(
+            `Warning: slot ${oldSlotId.slice(0, 8)} still has ${others.length} other task(s) — NOT deleting. Use 'af slot delete ${oldSlotId.slice(0, 8)}' to inspect.`
+          );
+        } else {
+          const slot = await client.getTimeSlot(oldSlotId);
+          if (slot) {
+            await client.upsertTimeSlots([
+              {
+                ...slot,
+                deleted_at: timestamp,
+                global_updated_at: timestamp,
+              } as CreateTimeSlotPayload,
+            ]);
+            console.log(`✓ Soft-deleted empty slot ${oldSlotId.slice(0, 8)}`);
+          }
+        }
+      } else if (oldSlotId) {
+        console.log(
+          `  (Slot ${oldSlotId.slice(0, 8)} kept; pass --delete-slot to remove it if empty)`
+        );
+      }
+    } catch (error) {
+      console.error("Error: Failed to unschedule task");
+      if (error instanceof Error) console.error(error.message);
+      process.exit(1);
+    }
+  },
+});
+
 export const taskCommand = defineCommand({
   meta: {
     name: "task",
@@ -821,13 +954,15 @@ export const taskCommand = defineCommand({
     plan: taskPlanCommand,
     snooze: taskSnoozeCommand,
     delete: taskDeleteCommand,
+    unschedule: taskUnscheduleCommand,
   },
   run: async () => {
     console.log("Task management subcommands:");
-    console.log("  edit   - Edit a task or recurring series (--scope this|following|all)");
-    console.log("  move   - Move task to a project");
-    console.log("  plan   - Schedule task for a specific date");
-    console.log("  snooze - Push task back by a duration");
-    console.log("  delete - Soft delete a task");
+    console.log("  edit       - Edit a task or recurring series (--scope this|following|all)");
+    console.log("  move       - Move task to a project");
+    console.log("  plan       - Schedule task for a specific date");
+    console.log("  snooze     - Push task back by a duration");
+    console.log("  delete     - Soft delete a task");
+    console.log("  unschedule - Remove a task from its time slot (sends back to day list / inbox)");
   },
 });
